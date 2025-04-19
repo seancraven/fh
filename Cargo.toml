@@ -1,0 +1,14 @@
+[package]
+name = "fuckhead"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { version = "1.0.98", features = ["backtrace"] }
+chrono = "0.4.40"
+clap = { version = "4.5.36", features = ["derive"] }
+env_logger = "0.11.8"
+log = "0.4.27"
+sqlx = { version = "0.8.5", features = ["chrono", "runtime-tokio", "sqlite"] }
+tempfile = "3.19.1"
+tokio = { version = "1.44.2", features = ["full"] }
