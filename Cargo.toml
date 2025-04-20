@@ -3,6 +3,10 @@ name = "fuckhead"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "fh"
+path = "src/main.rs"
+
 [dependencies]
 ansi_term = "0.12.1"
 anyhow = { version = "1.0.98", features = ["backtrace"] }
