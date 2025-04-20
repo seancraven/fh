@@ -32,7 +32,7 @@ async fn main() -> Result<()> {
         File::create(&db_path)?;
     }
     let store = setup_db(&format!("sqlite:///{}", &db_path.to_str().unwrap())).await;
-    env_logger::init_from_env(Env::new().default_filter_or("info"));
+    env_logger::init_from_env(Env::new().default_filter_or("critical"));
 
     match args {
         Mode::New { note_body } => {
