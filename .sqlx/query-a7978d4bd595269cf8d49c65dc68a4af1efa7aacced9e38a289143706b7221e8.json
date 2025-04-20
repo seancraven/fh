@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO day (date, task_count, day_text) VALUES (?1, ?2, ?3) RETURNING id \"id: u32\", date, task_count \"task_count:u32\", day_text;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id: u32",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "date",
+        "ordinal": 1,
+        "type_info": "Date"
+      },
+      {
+        "name": "task_count:u32",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "day_text",
+        "ordinal": 3,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a7978d4bd595269cf8d49c65dc68a4af1efa7aacced9e38a289143706b7221e8"
+}

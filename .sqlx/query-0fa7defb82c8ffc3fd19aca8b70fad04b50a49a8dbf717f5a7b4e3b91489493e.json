@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO note (body, created_at, completed, day_key) VALUES (?1, ?2, ?3, ?4) RETURNING id \"id: u32\";",
+  "describe": {
+    "columns": [
+      {
+        "name": "id: u32",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0fa7defb82c8ffc3fd19aca8b70fad04b50a49a8dbf717f5a7b4e3b91489493e"
+}

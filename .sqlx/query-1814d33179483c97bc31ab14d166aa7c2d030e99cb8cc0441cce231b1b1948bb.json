@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE day SET day_text = ?1 WHERE date = ?2;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "1814d33179483c97bc31ab14d166aa7c2d030e99cb8cc0441cce231b1b1948bb"
+}

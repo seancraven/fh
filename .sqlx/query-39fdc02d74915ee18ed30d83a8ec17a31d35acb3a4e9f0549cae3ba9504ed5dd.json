@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n            n.id \"id: u32\",\n            n.body,\n            n.completed \"completed: bool\",\n            n.created_at \"created_at: DateTime<Utc>\",\n            n.updated_at \"updated_at: DateTime<Utc>\",\n            n.deleted_at \"deleted_at: DateTime<Utc>\"\n            FROM note as n INNER JOIN day as d ON n.day_key = d.id WHERE d.date =? and n.deleted_at IS NULL\n            ORDER BY n.created_at;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id: u32",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "body",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "completed: bool",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "created_at: DateTime<Utc>",
+        "ordinal": 3,
+        "type_info": "Null"
+      },
+      {
+        "name": "updated_at: DateTime<Utc>",
+        "ordinal": 4,
+        "type_info": "Null"
+      },
+      {
+        "name": "deleted_at: DateTime<Utc>",
+        "ordinal": 5,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "39fdc02d74915ee18ed30d83a8ec17a31d35acb3a4e9f0549cae3ba9504ed5dd"
+}

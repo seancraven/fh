@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT day_text from day WHERE date = ?;",
+  "describe": {
+    "columns": [
+      {
+        "name": "day_text",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5edfaf793108f00b5c7d04de76211e30908c26a056d3dba6e20a760c54b0305a"
+}
