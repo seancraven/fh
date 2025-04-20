@@ -17,17 +17,18 @@ use log::{debug, info};
 use notes::{DayNotes, NewNote, Note};
 use store::NoteStore;
 use tempfile::NamedTempFile;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Mode::parse();
     let home = std::env::var("HOME")?;
+    // Setup fuckhead config.
     let db_path = PathBuf::from(home).join(".fuckhead/db.db");
     let parent = db_path.parent().unwrap();
     if !parent.exists() {
         debug!("Creating parent config dir at {}", parent.display());
         std::fs::create_dir(parent).unwrap();
     }
-
     if !db_path.exists() {
         File::create(&db_path)?;
     }
@@ -39,29 +40,46 @@ async fn main() -> Result<()> {
             let note = NewNote::new(note_body);
             store.insert_note(note).await.unwrap();
         }
-        Mode::Edit => {
-            let editor = std::env::var("EDITOR").unwrap_or(String::from("vim"));
-            let notes = store.get_days_notes(Utc::now().date_naive()).await.unwrap();
-            let mut file = NamedTempFile::with_suffix(".md")?;
-            // Try happy path on failure clean the file.
-            file.write(notes.pretty_md().as_bytes())?;
-            process::Command::new(editor).arg(file.path()).status()?;
-            let mut new_notes = String::new();
-            file.seek(std::io::SeekFrom::Start(0))?;
-            file.read_to_string(&mut new_notes)?;
-            parse_notes_string(new_notes, &store).await?;
+        Mode::Edit => edit(&store).await?,
+        Mode::Check => {
+            let day = Utc::now().date_naive();
+            let notes = store.get_days_notes(day).await?;
+            if notes.note_count == 0 {
+                edit(&store).await?
+            } else {
+                show(&store).await?
+            }
         }
-        Mode::Check => todo!(),
-        Mode::Show => {
-            let notes = store.get_days_notes(Utc::now().date_naive()).await?;
-            info!(
-                "found {} notes for {}",
-                notes.note_count,
-                notes.date.to_string()
-            );
-            println!("{}", notes.pretty());
-        }
+        Mode::Show => show(&store).await?,
     }
+    Ok(())
+}
+
+/// Run the edit subcommand open the prefered editor (should be vim)
+/// get the daily notes and update any changes made by the user.
+async fn edit(store: &NoteStore) -> Result<()> {
+    let editor = std::env::var("EDITOR").unwrap_or(String::from("vim"));
+    let notes = store.get_days_notes(Utc::now().date_naive()).await.unwrap();
+    let mut file = NamedTempFile::with_suffix(".md")?;
+    // Try happy path on failure clean the file.
+    file.write(notes.pretty_md().as_bytes())?;
+    process::Command::new(editor).arg(file.path()).status()?;
+    let mut new_notes = String::new();
+    file.seek(std::io::SeekFrom::Start(0))?;
+    file.read_to_string(&mut new_notes)?;
+    parse_notes_string(new_notes, &store).await?;
+    Ok(())
+}
+
+/// Run show sucommand, print current state to terminal.
+async fn show(store: &NoteStore) -> Result<()> {
+    let notes = store.get_days_notes(Utc::now().date_naive()).await?;
+    info!(
+        "found {} notes for {}",
+        notes.note_count,
+        notes.date.to_string()
+    );
+    println!("{}", notes.pretty());
     Ok(())
 }
 
@@ -122,8 +140,12 @@ async fn parse_notes_string(s: String, store: &NoteStore) -> Result<DayNotes> {
 /// Mode enum descibes state that the program runs in, write or read mode.
 #[derive(Parser, Debug)]
 enum Mode {
+    /// Check if new notes need to be added.
     Check,
+    /// Edit current day's notes.
     Edit,
+    /// Make a new note.
     New { note_body: String },
+    /// Show current day's notes.
     Show,
 }
