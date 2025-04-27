@@ -110,29 +110,37 @@ pub struct DayNotes {
     pub day_text: String,
 }
 impl DayNotes {
+    pub fn day_prefix(&self) -> &'static str {
+        if self.date == Utc::now().date_naive() {
+            "Today"
+        } else {
+            "Day"
+        }
+    }
     pub fn pretty_md(&self) -> String {
-        let mut out = format!("# Today: {}\n\n", self.date.to_string());
+        let mut out = format!("# {}: {}\n\n", self.day_prefix(), self.date);
         for note in &self.notes {
             out.push_str(&format!("{}\n", note.pretty()));
         }
         out.push_str(&format!("{}\n", Note::pretty_empty()));
-        out.push_str("\n");
+        out.push('\n');
         out.push_str(&self.day_text);
         out
     }
     pub fn pretty(&self) -> String {
         let mut out = format!(
-            "Today: {} \n\n",
-            Color::Green.paint(self.date.to_string()).to_string()
+            "{}: {} \n\n",
+            self.day_prefix(),
+            Color::Green.paint(self.date.to_string())
         );
         out = Style::new().bold().paint(out).to_string();
         for note in &self.notes {
             out.push_str(&format!("{}\n", note.pretty()));
         }
-        if self.notes.len() == 0 {
+        if self.notes.is_empty() {
             out.push_str("No Notes.");
         }
-        out.push_str("\n");
+        out.push('\n');
         out.push_str(&self.day_text);
         out
     }
