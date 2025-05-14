@@ -10,7 +10,7 @@ use std::{
 
 use crate::store::setup_db;
 use anyhow::{Result, anyhow};
-use chrono::{DateTime, Days, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Days, Local, NaiveDate, TimeZone};
 use clap::Parser;
 use env_logger::Env;
 use log::{debug, info};
@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
         }
         Mode::Edit { day } => edit(&store, day).await?,
         Mode::Check => {
-            let day = Utc::now().date_naive();
+            let day = Local::now().date_naive();
             let notes = store.get_days_notes(day).await?;
             if notes.note_count == 0 {
                 edit(&store, None).await?
@@ -59,7 +59,7 @@ where
     Tz: TimeZone,
 {
     let Some(day) = day else {
-        return start_datetime.date_naive();
+        return start_datetime.naive_utc().date();
     };
     let target_datetime;
     if day > 0 {
@@ -71,14 +71,14 @@ where
             .checked_sub_days(Days::new(day.abs() as u64))
             .expect("Don't account for leap");
     }
-    target_datetime.date_naive()
+    target_datetime.naive_utc().date()
 }
 
 /// Run the edit subcommand open the prefered editor (should be vim)
 /// get the daily notes and update any changes made by the user.
 async fn edit(store: &NoteStore, day: Option<i32>) -> Result<()> {
     let editor = std::env::var("EDITOR").unwrap_or(String::from("vim"));
-    let target_day = map_day(Utc::now(), day);
+    let target_day = map_day(Local::now(), day);
     let notes = store.get_days_notes(target_day).await.unwrap();
     let mut file = NamedTempFile::with_suffix(".md")?;
     // Try happy path on failure clean the file.
@@ -93,7 +93,7 @@ async fn edit(store: &NoteStore, day: Option<i32>) -> Result<()> {
 
 /// Run show sucommand, print current state to terminal.
 async fn show(store: &NoteStore, day: Option<i32>) -> Result<()> {
-    let target_day = map_day(Utc::now(), day);
+    let target_day = map_day(Local::now(), day);
     let notes = store.get_days_notes(target_day).await?;
     info!(
         "found {} notes for {}",
@@ -169,14 +169,38 @@ enum Mode {
     /// Edit current day's notes.
     ///
     Edit {
-        #[arg(short, long, default_value=None)]
+        #[arg(short, long, default_value=None, allow_hyphen_values=true)]
         day: Option<i32>,
     },
     /// Make a new note.
     New { note_body: String },
     /// Show current day's notes.
     Show {
-        #[arg(short, long, default_value=None)]
+        #[arg(short, long, default_value=None, allow_hyphen_values=true)]
         day: Option<i32>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Days, Local, Timelike};
+
+    use crate::map_day;
+
+    #[test]
+    fn test_date() {
+        let time = Local::now();
+        for hour in 0..24 {
+            let target_time = time.with_hour(hour).unwrap();
+            for day in 0..2 {
+                let out = map_day(target_time, Some(day));
+                let out_base = target_time
+                    .checked_add_days(Days::new(day as u64))
+                    .unwrap()
+                    .naive_utc()
+                    .date();
+                assert_eq!(out, out_base);
+            }
+        }
+    }
 }
