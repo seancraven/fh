@@ -11,7 +11,7 @@ use std::{
 use crate::store::setup_db;
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Days, Local, NaiveDate, TimeZone};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use env_logger::Env;
 use log::{debug, info};
 use notes::{DayNotes, NewNote, Note};
@@ -40,7 +40,10 @@ async fn main() -> Result<()> {
             let note = NewNote::new(note_body);
             store.insert_note(note).await.unwrap();
         }
-        Mode::Edit { day } => edit(&store, day).await?,
+        Mode::Edit { day } => {
+            edit(&store, day).await?;
+            show(&store, day).await?;
+        }
         Mode::Check => {
             let day = Local::now().date_naive();
             let notes = store.get_days_notes(day).await?;
@@ -50,7 +53,7 @@ async fn main() -> Result<()> {
                 show(&store, None).await?
             }
         }
-        Mode::Show { day } => show(&store, day).await?,
+        Mode::Show { day, period } => show(&store, day).await?,
     }
     Ok(())
 }
@@ -161,6 +164,12 @@ async fn parse_notes_string(s: String, store: &NoteStore) -> Result<DayNotes> {
     store.get_days_notes(day).await
 }
 
+#[derive(Subcommand, Debug)]
+enum Period {
+    Day,
+    Week,
+    Month,
+}
 /// Mode enum descibes state that the program runs in, write or read mode.
 #[derive(Parser, Debug)]
 enum Mode {
@@ -178,14 +187,15 @@ enum Mode {
     Show {
         #[arg(short, long, default_value=None, allow_hyphen_values=true)]
         day: Option<i32>,
+        #[command(subcommand)]
+        period: Option<Period>,
     },
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Days, Local, Timelike};
-
     use crate::map_day;
+    use chrono::{Days, Local, Timelike};
 
     #[test]
     fn test_date() {
