@@ -23,6 +23,16 @@ pub struct NoteRow {
     updated_at: Option<DateTime<Utc>>,
     deleted_at: Option<DateTime<Utc>>,
 }
+#[derive(FromRow)]
+pub struct NoteRowDate {
+    pub id: u32,
+    pub body: String,
+    pub completed: bool,
+    pub created_at: DateTime<Utc>,
+    updated_at: Option<DateTime<Utc>>,
+    deleted_at: Option<DateTime<Utc>>,
+    date: NaiveDate,
+}
 
 pub struct NoteStore {
     pub pool: SqlitePool,
@@ -128,6 +138,55 @@ impl NoteStore {
         .await
         .map(|_| ())
         .context("Failed while updating day text.")
+    }
+    pub async fn get_day_notes_in_range(
+        &self,
+        start_day: NaiveDate,
+        end_day: NaiveDate,
+    ) -> Result<Vec<DayNotes>> {
+        let jobbies = sqlx::query_as!(
+            NoteRowDate,
+            r#"SELECT
+            n.id "id: u32",
+            n.body,
+            n.completed "completed: bool",
+            n.created_at "created_at: DateTime<Utc>",
+            n.updated_at "updated_at: DateTime<Utc>",
+            n.deleted_at "deleted_at: DateTime<Utc>",
+            d.date
+            FROM note as n INNER JOIN day as d ON n.day_key = d.id WHERE d.date BETWEEN ?1 AND ?2 and n.deleted_at IS NULL
+            GROUP BY d.date ORDER BY n.created_at;"#,
+            start_day,
+            end_day
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context(format!("Failed fetching day notes between days {}:{}.", start_day, end_day))?;
+        let mut current_notes = vec![];
+        let mut notes = vec![];
+        let mut current_day = None;
+        for row in jobbies {
+            if current_day.is_none() {
+                current_day = Some(row.date);
+            }
+            if current_day.unwrap() != row.date {
+                let text =
+                    sqlx::query_scalar!("SELECT day_text from day WHERE date = ?;", current_day)
+                        .fetch_optional(&self.pool)
+                        .await
+                        .context("Failed fetching day summary text.")?;
+                let note_count = current_notes.len() as u32;
+                notes.push(DayNotes {
+                    notes: std::mem::take(&mut current_notes),
+                    date: current_day.unwrap(),
+                    note_count,
+                    day_text: text.unwrap_or(String::new()),
+                });
+                current_day = Some(row.date)
+            }
+            current_notes.push(Note::from(row));
+        }
+        Ok(notes)
     }
     pub async fn get_days_notes(&self, day: NaiveDate) -> Result<DayNotes> {
         let jobbies = sqlx::query_as!(

@@ -1,4 +1,4 @@
-use crate::store::{NoteRow, NoteStore};
+use crate::store::{NoteRow, NoteRowDate, NoteStore};
 use ansi_term::{Color, Style};
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, NaiveDate, Utc};
@@ -12,6 +12,16 @@ pub struct Note {
 }
 impl From<NoteRow> for Note {
     fn from(value: NoteRow) -> Self {
+        Note {
+            id: value.id,
+            body: value.body,
+            completed: value.completed,
+            created_at: value.created_at,
+        }
+    }
+}
+impl From<NoteRowDate> for Note {
+    fn from(value: NoteRowDate) -> Self {
         Note {
             id: value.id,
             body: value.body,

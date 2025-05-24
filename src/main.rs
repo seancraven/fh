@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::store::setup_db;
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Days, Local, NaiveDate, TimeZone};
 use clap::{Parser, Subcommand};
 use env_logger::Env;
@@ -53,7 +53,10 @@ async fn main() -> Result<()> {
                 show(&store, None).await?
             }
         }
-        Mode::Show { day, period } => show(&store, day).await?,
+        Mode::Show { day, period } => match period {
+            None => show(&store, day).await?,
+            Some(p) => show_range(&store, day, p.to_day_count()).await?,
+        },
     }
     Ok(())
 }
@@ -94,9 +97,25 @@ async fn edit(store: &NoteStore, day: Option<i32>) -> Result<()> {
     Ok(())
 }
 
+async fn show_range(store: &NoteStore, day: Option<i32>, time_span: usize) -> Result<()> {
+    let day = day.unwrap_or(0);
+    let start_day = map_day(Local::now(), Some(-(time_span as i32) + day));
+    let end_day = map_day(Local::now(), Some(time_span as i32 + day));
+    let all_notes = store
+        .get_day_notes_in_range(start_day, end_day)
+        .await
+        .context("Failed querying all notes.")?;
+    let mut out = String::new();
+    for note in all_notes {
+        out.push_str(&note.pretty())
+    }
+    println!("{}", out);
+    Ok(())
+}
 /// Run show sucommand, print current state to terminal.
 async fn show(store: &NoteStore, day: Option<i32>) -> Result<()> {
     let target_day = map_day(Local::now(), day);
+
     let notes = store.get_days_notes(target_day).await?;
     info!(
         "found {} notes for {}",
@@ -166,9 +185,16 @@ async fn parse_notes_string(s: String, store: &NoteStore) -> Result<DayNotes> {
 
 #[derive(Subcommand, Debug)]
 enum Period {
-    Day,
     Week,
     Month,
+}
+impl Period {
+    fn to_day_count(&self) -> usize {
+        match *self {
+            Self::Week => 7,
+            Self::Month => 30,
+        }
+    }
 }
 /// Mode enum descibes state that the program runs in, write or read mode.
 #[derive(Parser, Debug)]
