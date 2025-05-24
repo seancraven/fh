@@ -128,6 +128,9 @@ async fn show(store: &NoteStore, day: Option<i32>) -> Result<()> {
 
 /// Compare the current database state to that input by the user, perform the inserts and soft deltes required to
 /// maintain the state between the frontend (notes) and db.
+/// Would be much better to maintain a diff state and commit at the end,
+/// However I am a lazy man and sqlite is fast enough.
+/// Might actually write a better version of this. Its quite fun.
 async fn parse_notes_string(s: String, store: &NoteStore) -> Result<DayNotes> {
     let mut line_iter = s.lines();
     let mut date: Option<&str> = None;
