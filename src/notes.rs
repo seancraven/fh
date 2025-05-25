@@ -6,33 +6,33 @@ use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, NaiveDate, Utc};
 
 #[derive(Debug)]
-pub enum InsertNote {
+pub enum ParsedNote {
     Note(Note),
     NewNote(NewNote),
 }
-impl InsertNote {
+impl ParsedNote {
     pub fn is_new_note(&self) -> bool {
         match self {
-            InsertNote::NewNote(_) => false,
-            InsertNote::Note(_) => true,
+            ParsedNote::NewNote(_) => true,
+            ParsedNote::Note(_) => false,
         }
     }
     pub fn new_note(self) -> Option<NewNote> {
         match self {
-            InsertNote::NewNote(n) => Some(n),
-            InsertNote::Note(_) => None,
+            ParsedNote::NewNote(n) => Some(n),
+            ParsedNote::Note(_) => None,
         }
     }
     pub fn note(self) -> Option<Note> {
         match self {
-            InsertNote::NewNote(_) => None,
-            InsertNote::Note(n) => Some(n),
+            ParsedNote::NewNote(_) => None,
+            ParsedNote::Note(n) => Some(n),
         }
     }
     pub fn is_note(&self) -> bool {
         !self.is_new_note()
     }
-    pub fn parse_pretty_md(s: impl AsRef<str>) -> Result<Option<InsertNote>> {
+    pub fn parse_pretty_md(s: impl AsRef<str>) -> Result<Option<ParsedNote>> {
         let s = s.as_ref();
         let s = s.trim();
         if s.len() < 7 {
@@ -59,7 +59,7 @@ impl InsertNote {
                     id_string,
                     &s[idx + 1..]
                 ))?;
-                return Ok(Some(InsertNote::Note(Note {
+                return Ok(Some(ParsedNote::Note(Note {
                     id,
                     body,
                     completed,
@@ -70,7 +70,7 @@ impl InsertNote {
                 if new_note_text.is_empty() {
                     return Ok(None);
                 }
-                return Ok(Some(InsertNote::NewNote(NewNote {
+                return Ok(Some(ParsedNote::NewNote(NewNote {
                     body: String::from(new_note_text),
                     completed,
                     created_at: Utc::now(),
@@ -206,6 +206,7 @@ impl DayNotes {
         out.push_str(&format!("{}\n", Note::pretty_empty()));
         out.push('\n');
         out.push_str(&self.day_text);
+        out.push_str("---");
         out
     }
     pub fn pretty(&self) -> String {
@@ -225,7 +226,15 @@ impl DayNotes {
         out.push_str(&self.day_text);
         out
     }
-    pub fn parse_md(mut line_iter: Lines<'_>) -> Result<DayNotes> {
+}
+pub struct ParsedDayNotes {
+    pub notes: Vec<ParsedNote>,
+    pub note_count: u32,
+    pub date: NaiveDate,
+    pub day_text: String,
+}
+impl ParsedDayNotes {
+    pub fn parse_pretty_md(line_iter: &mut Lines<'_>) -> Result<ParsedDayNotes> {
         let mut date: Option<&str> = None;
         // Iterate through lines till find the date prefix!
         while date.is_none() {
@@ -241,53 +250,54 @@ impl DayNotes {
             }
         }
         let date = date.ok_or(anyhow!("Couldn't find text."))?;
-        let day = NaiveDate::from_str(date)?;
+        let date = NaiveDate::from_str(date)?;
+        let mut day_text = String::new();
+        let mut notes = vec![];
         // Update notes by line.
         for line in line_iter {
+            // exit the iteration if end of day note is found.
+            if line == "---" {
+                break;
+            }
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
+            match line.chars().next().unwrap() {
+                '-' => {
+                    let Ok(Some(n)) = ParsedNote::parse_pretty_md(line) else {
+                        continue;
+                    };
+                    notes.push(n);
+                }
+                _ => {
+                    day_text.push_str(line);
+                    day_text.push_str("\n");
+                }
+            }
         }
-        //     match line.chars().next().unwrap() {
-        //         '-' => {
-        //             let Some(n) = Note::from_pretty(store, line).await? else {
-        //                 continue;
-        //             };
-        //             seen_notes.push(n.id);
-        //         }
-        //         _ => {
-        //             free_text.push_str(line);
-        //             free_text.push_str("\n");
-        //         }
-        //     }
-        // }
-        // if !free_text.is_empty() && free_text != day_notes.day_text {
-        //     day_notes.day_text = free_text;
-        //     store
-        //         .update_day_text(day_notes.date, &day_notes.day_text)
-        //         .await?;
-        // }
-        // // Delete notes that have been removed.
-        // for note_id in day_note_ids {
-        //     if !seen_notes.contains(&note_id) {
-        //         store.soft_delte_note_by_id(note_id).await?;
-        //     }
-        // }
-        // store.get_days_notes(day).await
-        todo!();
+        let note_count = notes.len() as u32;
+        Ok(ParsedDayNotes {
+            notes,
+            note_count,
+            date,
+            day_text,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{fs::File, io::Read, str::FromStr};
+
     use crate::{
         notes::{NewNote, Note},
         store::setup_db,
     };
+    use chrono::NaiveDate;
     use sqlx::migrate;
 
-    use super::InsertNote;
+    use super::{ParsedDayNotes, ParsedNote};
 
     async fn setup_sqlitedb() -> crate::store::NoteStore {
         let s = setup_db("sqlite://:memory:").await;
@@ -358,7 +368,7 @@ mod tests {
         let table = vec![" - [ ] :", " - [x] :1:", " - [x] :"];
         for input in table {
             println!("{}", input);
-            let note = InsertNote::parse_pretty_md(input).unwrap();
+            let note = ParsedNote::parse_pretty_md(input).unwrap();
             assert!(note.is_none());
         }
     }
@@ -371,7 +381,7 @@ mod tests {
         ];
         for ((comp, text), input) in table {
             println!("{}", input);
-            let note = InsertNote::parse_pretty_md(input)
+            let note = ParsedNote::parse_pretty_md(input)
                 .unwrap()
                 .unwrap()
                 .new_note()
@@ -391,7 +401,7 @@ mod tests {
             ),
         ];
         for ((comp, id, text), input) in table {
-            let note = InsertNote::parse_pretty_md(input)
+            let note = ParsedNote::parse_pretty_md(input)
                 .unwrap()
                 .unwrap()
                 .note()
@@ -414,8 +424,37 @@ mod tests {
             " - [ ]:hi: test",
         ];
         for input in table {
-            let note = InsertNote::parse_pretty_md(input);
+            let note = ParsedNote::parse_pretty_md(input);
             assert!(note.is_err(), "{}", input);
         }
+    }
+    #[test]
+    fn test_parse_day_note() {
+        let mut input = String::new();
+        File::open("test/day_notes.md")
+            .unwrap()
+            .read_to_string(&mut input)
+            .unwrap();
+        println!("{}", input);
+        let mut lines = input.lines();
+        let notes = ParsedDayNotes::parse_pretty_md(&mut lines).unwrap();
+        assert_eq!(notes.notes.len(), 0);
+        assert_eq!(notes.date, NaiveDate::from_str("12-10-25").unwrap());
+    }
+    #[test]
+    fn test_parse_day_note_double() {
+        let mut input = String::new();
+        File::open("test/day_notes.md")
+            .unwrap()
+            .read_to_string(&mut input)
+            .unwrap();
+        println!("{}", input);
+        let mut lines = input.lines();
+        ParsedDayNotes::parse_pretty_md(&mut lines).unwrap();
+        let notes = ParsedDayNotes::parse_pretty_md(&mut lines).unwrap();
+        assert_eq!(notes.notes.len(), 2);
+        assert_eq!(notes.date, NaiveDate::from_str("12-10-25").unwrap());
+        assert!(notes.notes[0].is_note(), "{:?}", notes.notes);
+        assert!(notes.notes[1].is_new_note());
     }
 }

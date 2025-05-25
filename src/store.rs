@@ -1,7 +1,10 @@
-use crate::notes::{DayNotes, NewNote, Note};
-use anyhow::{Context, Result};
+use std::{collections::HashMap, iter::zip};
+
+use crate::notes::{DayNotes, NewNote, Note, ParsedNote};
+use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{SqlitePool, migrate, prelude::FromRow};
+use tokio::join;
 pub async fn setup_db(fname: &str) -> NoteStore {
     let pool = SqlitePool::connect(fname).await.unwrap();
     migrate!().run(&pool).await.unwrap();
@@ -100,6 +103,71 @@ impl NoteStore {
             task_count,
             text
         ).fetch_one(&self.pool).await.context("Failed inserting day.")
+    }
+    pub async fn upsert_notes(&self, ns: Vec<ParsedNote>) -> Result<Vec<Note>> {
+        let note_count = ns.len();
+        let mut new = vec![];
+        let mut existing = vec![];
+        let found_keys = HashMap::<NaiveDate, u32>::new();
+        for n in ns {
+            match n {
+                ParsedNote::Note(n) => existing.push((n.id, n.body, n.completed)),
+                ParsedNote::NewNote(n) => {
+                    let key = match found_keys.get(&n.date_created()) {
+                        Some(key) => *key,
+                        None => {
+                            self.fetch_day(n.date_created())
+                                .await?
+                                .ok_or(anyhow!(
+                                    "Tried inserting a note for a day that doesn't exist."
+                                ))?
+                                .id
+                        }
+                    };
+                    new.push((n.body, n.created_at, n.completed, key))
+                }
+            };
+        }
+        let tx = self.pool.begin().await?;
+        let mut handles = Vec::with_capacity(new.len());
+        for row in &new {
+            let (body, time, comp, day_key) = row;
+            let jh = tokio::spawn(
+                sqlx::query!(
+                    r#"INSERT INTO
+                    note (body, created_at, completed, day_key)
+                    VALUES (?1, ?2, ?3, ?4) RETURNING id "id: u32";"#,
+                    *body,
+                    *time,
+                    *comp,
+                    *day_key
+                )
+                .fetch_one(&self.pool),
+            );
+            handles.push(jh);
+        }
+        let mut notes = Vec::with_capacity(note_count);
+        for (handle, new_item) in zip(handles, new) {
+            let id_res = handle
+                .await
+                .expect("Awaiting join handle failed, we can't manage this.");
+
+            let note = match id_res {
+                Ok(id) => Note {
+                    id: id.id,
+                    body: new_item.0,
+                    completed: new_item.2,
+                },
+                Err(e) => {
+                    tx.rollback().await.expect("Rollback failed.");
+                    return Err(anyhow!("{}", e));
+                }
+            };
+
+            notes.push(note)
+        }
+
+        todo!();
     }
     pub async fn insert_note(&self, n: NewNote) -> Result<Note> {
         let date = self
