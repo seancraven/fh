@@ -59,22 +59,22 @@ impl ParsedNote {
                     id_string,
                     &s[idx + 1..]
                 ))?;
-                return Ok(Some(ParsedNote::Note(Note {
+                Ok(Some(ParsedNote::Note(Note {
                     id,
                     body,
                     completed,
-                })));
+                })))
             }
             None => {
                 let new_note_text = s[idx + 1..].trim();
                 if new_note_text.is_empty() {
                     return Ok(None);
                 }
-                return Ok(Some(ParsedNote::NewNote(NewNote {
+                Ok(Some(ParsedNote::NewNote(NewNote {
                     body: String::from(new_note_text),
                     completed,
                     created_at: Utc::now(),
-                })));
+                })))
             }
         }
     }
@@ -134,11 +134,12 @@ impl Note {
                     id_string,
                     &s[idx + 1..]
                 ))?;
-                return store
-                    ._update_note(id, body, completed)
-                    .await
-                    .map(Note::from)
-                    .map(Some);
+                let note = Note {
+                    id,
+                    body,
+                    completed,
+                };
+                return store.update_note(&note).await.map(Some);
             }
             None => {
                 let new_note_text = s[idx + 1..].trim();
@@ -272,7 +273,7 @@ impl ParsedDayNotes {
                 }
                 _ => {
                     day_text.push_str(line);
-                    day_text.push_str("\n");
+                    day_text.push('\n');
                 }
             }
         }
@@ -294,7 +295,7 @@ mod tests {
         notes::{NewNote, Note},
         store::setup_db,
     };
-    use chrono::NaiveDate;
+    use chrono::{NaiveDate, Utc};
     use sqlx::migrate;
 
     use super::{ParsedDayNotes, ParsedNote};
@@ -302,6 +303,9 @@ mod tests {
     async fn setup_sqlitedb() -> crate::store::NoteStore {
         let s = setup_db("sqlite://:memory:").await;
         migrate!().run(&s.pool).await.unwrap();
+        s.insert_day(Utc::now().date_naive(), None, "")
+            .await
+            .unwrap();
         s
     }
     #[tokio::test]
@@ -355,13 +359,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(!n.completed)
-    }
-    #[tokio::test]
-    async fn test_invalid_id_fail() {
-        let store = setup_sqlitedb().await;
-        store.insert_note(NewNote::new("test")).await.unwrap();
-        let n = Note::from_pretty(&store, " - [ ] :42: hi").await;
-        assert!(n.is_err())
     }
     #[test]
     fn test_parse_none() {

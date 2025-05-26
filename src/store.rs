@@ -1,10 +1,7 @@
-use std::{collections::HashMap, iter::zip};
-
-use crate::notes::{DayNotes, NewNote, Note, ParsedNote};
-use anyhow::{Context, Result, anyhow};
+use crate::notes::{DayNotes, NewNote, Note, ParsedDayNotes, ParsedNote};
+use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{SqlitePool, migrate, prelude::FromRow};
-use tokio::join;
 pub async fn setup_db(fname: &str) -> NoteStore {
     let pool = SqlitePool::connect(fname).await.unwrap();
     migrate!().run(&pool).await.unwrap();
@@ -61,18 +58,7 @@ impl NoteStore {
         .await
         .context("Failed fetchig day.")
     }
-    pub async fn update_note(&self, n: Note) -> Result<Note> {
-        self._update_note(n.id, n.body, n.completed)
-            .await
-            .map(Note::from)
-    }
-    pub async fn _update_note(
-        &self,
-        id: u32,
-        body_text: impl AsRef<str>,
-        completed: bool,
-    ) -> Result<NoteRow> {
-        let body_text = body_text.as_ref();
+    pub async fn update_note(&self, n: &Note) -> Result<Note> {
         sqlx::query_as!(
             NoteRow,
             r#"UPDATE  note SET body = ?1, completed = ?2, updated_at = (datetime('now')) WHERE id = ?3
@@ -83,10 +69,10 @@ impl NoteStore {
             updated_at "updated_at: DateTime<Utc>",
             deleted_at "deleted_at: DateTime<Utc>"
             "#,
-            body_text,
-            completed,
-            id,
-        ).fetch_one(&self.pool).await.context(format!("Failed updating note {}", id))
+            n.body,
+            n.completed,
+            n.id,
+        ).fetch_one(&self.pool).await.context(format!("Failed updating note {}", n.id)).map(|r| Note::from(r))
     }
     pub async fn insert_day(
         &self,
@@ -104,95 +90,76 @@ impl NoteStore {
             text
         ).fetch_one(&self.pool).await.context("Failed inserting day.")
     }
-    pub async fn upsert_notes(&self, ns: Vec<ParsedNote>) -> Result<Vec<Note>> {
-        let note_count = ns.len();
-        let mut new = vec![];
-        let mut existing = vec![];
-        let found_keys = HashMap::<NaiveDate, u32>::new();
-        for n in ns {
-            match n {
-                ParsedNote::Note(n) => existing.push((n.id, n.body, n.completed)),
-                ParsedNote::NewNote(n) => {
-                    let key = match found_keys.get(&n.date_created()) {
-                        Some(key) => *key,
-                        None => {
-                            self.fetch_day(n.date_created())
-                                .await?
-                                .ok_or(anyhow!(
-                                    "Tried inserting a note for a day that doesn't exist."
-                                ))?
-                                .id
-                        }
-                    };
-                    new.push((n.body, n.created_at, n.completed, key))
-                }
-            };
-        }
-        let tx = self.pool.begin().await?;
-        let mut handles = Vec::with_capacity(new.len());
-        for row in &new {
-            let (body, time, comp, day_key) = row;
-            let jh = tokio::spawn(
-                sqlx::query!(
-                    r#"INSERT INTO
-                    note (body, created_at, completed, day_key)
-                    VALUES (?1, ?2, ?3, ?4) RETURNING id "id: u32";"#,
-                    *body,
-                    *time,
-                    *comp,
-                    *day_key
-                )
-                .fetch_one(&self.pool),
-            );
-            handles.push(jh);
-        }
-        let mut notes = Vec::with_capacity(note_count);
-        for (handle, new_item) in zip(handles, new) {
-            let id_res = handle
-                .await
-                .expect("Awaiting join handle failed, we can't manage this.");
-
-            let note = match id_res {
-                Ok(id) => Note {
-                    id: id.id,
-                    body: new_item.0,
-                    completed: new_item.2,
-                },
-                Err(e) => {
-                    tx.rollback().await.expect("Rollback failed.");
-                    return Err(anyhow!("{}", e));
-                }
-            };
-
-            notes.push(note)
-        }
-
-        todo!();
-    }
     pub async fn insert_note(&self, n: NewNote) -> Result<Note> {
-        let date = self
-            .fetch_day(n.date_created())
+        let utc_naive = n.created_at.date_naive();
+        let day_key = sqlx::query_scalar!(r#"SELECT id FROM day WHERE date=?1;"#, utc_naive)
+            .fetch_one(&self.pool)
+            .await? as u32;
+        let note = self
+            ._insert_note(&n.body, n.created_at, n.completed, day_key)
             .await
-            .context("Failed day query before adding note.")?;
-
-        let d = match date {
-            Some(d) => d,
-            None => self
-                .insert_day(n.date_created(), None, "")
-                .await
-                .context("Failed making new day on first note addition.")?,
-        };
-        let iso_time = n.created_at.to_rfc3339();
+            .map(|id| n.to_note(id));
+        note
+    }
+    async fn _insert_note(
+        &self,
+        body: impl AsRef<str>,
+        created_at: DateTime<Utc>,
+        completed: bool,
+        day_key: u32,
+    ) -> Result<u32> {
+        let body = body.as_ref();
         sqlx::query_scalar!(
             r#"INSERT INTO note (body, created_at, completed, day_key) VALUES (?1, ?2, ?3, ?4) RETURNING id "id: u32";"#,
-            n.body,
-            iso_time,
-            n.completed,
-            d.id
+            body,
+            created_at,
+            completed,
+            day_key,
         )
         .fetch_one(&self.pool)
         .await
-        .context("Failed adding note.").map(|id| n.to_note(id))
+        .context("Failed adding note.")
+    }
+    pub async fn persist_parsed_day_note(&self, note: ParsedDayNotes) -> Result<DayNotes> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("Failed to start transaction.")?;
+        let day_key = sqlx::query_scalar!(
+            r#"INSERT INTO day (date, task_count, day_text) 
+            VALUES (?1, ?2, ?3) 
+            ON CONFLICT (date) 
+            DO UPDATE SET date=?1, task_count=?2, day_text=?3 RETURNING id;"#,
+            note.date,
+            note.note_count,
+            note.day_text,
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .context("Failied upserting day note.")?;
+        let mut notes = vec![];
+        for n in note.notes {
+            let note = match n {
+                ParsedNote::NewNote(n) => self
+                    ._insert_note(&n.body, n.created_at, n.completed, day_key as u32)
+                    .await
+                    .map(|id| n.to_note(id))?,
+                ParsedNote::Note(n) => {
+                    self.update_note(&n).await?;
+                    n
+                }
+            };
+            notes.push(note);
+        }
+        tx.commit().await?;
+        let note_count = notes.len() as u32;
+        Ok(DayNotes {
+            notes,
+            date: note.date,
+            day_text: note.day_text,
+            note_count,
+        })
     }
 
     pub async fn update_day_text(&self, date: NaiveDate, day_text: impl AsRef<str>) -> Result<()> {

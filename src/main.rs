@@ -14,7 +14,7 @@ use chrono::{DateTime, Days, Local, NaiveDate, TimeZone};
 use clap::{Parser, Subcommand};
 use env_logger::Env;
 use log::{debug, info};
-use notes::{DayNotes, NewNote, Note};
+use notes::{DayNotes, Note};
 use store::NoteStore;
 use tempfile::NamedTempFile;
 
@@ -36,10 +36,6 @@ async fn main() -> Result<()> {
     env_logger::init_from_env(Env::new().default_filter_or("critical"));
 
     match args {
-        Mode::New { note_body } => {
-            let note = NewNote::new(note_body);
-            store.insert_note(note).await.unwrap();
-        }
         Mode::Edit { day } => {
             edit(&store, day).await?;
             show(&store, day).await?;
@@ -67,16 +63,15 @@ where
     let Some(day) = day else {
         return start_datetime.naive_utc().date();
     };
-    let target_datetime;
-    if day > 0 {
-        target_datetime = start_datetime
+    let target_datetime = if day > 0 {
+        start_datetime
             .checked_add_days(Days::new(day as u64))
-            .expect("Don't account for leap");
+            .expect("Don't account for leap")
     } else {
-        target_datetime = start_datetime
-            .checked_sub_days(Days::new(day.abs() as u64))
-            .expect("Don't account for leap");
-    }
+        start_datetime
+            .checked_sub_days(Days::new(day.unsigned_abs() as u64))
+            .expect("Don't account for leap")
+    };
     target_datetime.naive_utc().date()
 }
 
@@ -93,7 +88,7 @@ async fn edit(store: &NoteStore, day: Option<i32>) -> Result<()> {
     let mut new_notes = String::new();
     file.seek(std::io::SeekFrom::Start(0))?;
     file.read_to_string(&mut new_notes)?;
-    parse_notes_string(new_notes, &store).await?;
+    parse_notes_string(new_notes, store).await?;
     Ok(())
 }
 
@@ -117,11 +112,7 @@ async fn show(store: &NoteStore, day: Option<i32>) -> Result<()> {
     let target_day = map_day(Local::now(), day);
 
     let notes = store.get_days_notes(target_day).await?;
-    info!(
-        "found {} notes for {}",
-        notes.note_count,
-        notes.date.to_string()
-    );
+    info!("found {} notes for {}", notes.note_count, notes.date);
     println!("{}", notes.pretty());
     Ok(())
 }
@@ -167,7 +158,7 @@ async fn parse_notes_string(s: String, store: &NoteStore) -> Result<DayNotes> {
             }
             _ => {
                 free_text.push_str(line);
-                free_text.push_str("\n");
+                free_text.push('\n');
             }
         }
     }
@@ -210,8 +201,6 @@ enum Mode {
         #[arg(short, long, default_value=None, allow_hyphen_values=true)]
         day: Option<i32>,
     },
-    /// Make a new note.
-    New { note_body: String },
     /// Show current day's notes.
     Show {
         #[arg(short, long, default_value=None, allow_hyphen_values=true)]
