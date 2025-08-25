@@ -95,13 +95,15 @@ async fn edit(store: &NoteStore, day: Option<i32>) -> Result<()> {
 async fn show_range(store: &NoteStore, day: Option<i32>, time_span: usize) -> Result<()> {
     let day = day.unwrap_or(0);
     let start_day = map_day(Local::now(), Some(-(time_span as i32) + day));
-    let end_day = map_day(Local::now(), Some(time_span as i32 + day));
+    let end_day = map_day(Local::now(), Some(1));
+    log::info!("Fetching notes between {} and {}", start_day, end_day);
     let all_notes = store
         .get_day_notes_in_range(start_day, end_day)
         .await
         .context("Failed querying all notes.")?;
     let mut out = String::new();
     for note in all_notes {
+        log::debug!("Found note {}: {}", note.date, note.note_count);
         out.push_str(&note.pretty())
     }
     println!("{}", out);

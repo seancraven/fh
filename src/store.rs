@@ -1,6 +1,6 @@
 use crate::notes::{DayNotes, NewNote, Note, ParsedDayNotes, ParsedNote};
 use anyhow::{Context, Result};
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Days, NaiveDate, Utc};
 use sqlx::{SqlitePool, migrate, prelude::FromRow};
 pub async fn setup_db(fname: &str) -> NoteStore {
     let pool = SqlitePool::connect(fname).await.unwrap();
@@ -127,9 +127,9 @@ impl NoteStore {
             .await
             .context("Failed to start transaction.")?;
         let day_key = sqlx::query_scalar!(
-            r#"INSERT INTO day (date, task_count, day_text) 
-            VALUES (?1, ?2, ?3) 
-            ON CONFLICT (date) 
+            r#"INSERT INTO day (date, task_count, day_text)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT (date)
             DO UPDATE SET date=?1, task_count=?2, day_text=?3 RETURNING id;"#,
             note.date,
             note.note_count,
@@ -190,7 +190,7 @@ impl NoteStore {
             n.deleted_at "deleted_at: DateTime<Utc>",
             d.date
             FROM note as n INNER JOIN day as d ON n.day_key = d.id WHERE d.date BETWEEN ?1 AND ?2 and n.deleted_at IS NULL
-            GROUP BY d.date ORDER BY n.created_at;"#,
+            ORDER BY n.created_at;"#,
             start_day,
             end_day
         )
@@ -200,6 +200,12 @@ impl NoteStore {
         let mut current_notes = vec![];
         let mut notes = vec![];
         let mut current_day = None;
+        log::info!(
+            "Fetched rows {} when querying days between {} and {}",
+            jobbies.len(),
+            start_day,
+            end_day
+        );
         for row in jobbies {
             if current_day.is_none() {
                 current_day = Some(row.date);
@@ -221,35 +227,24 @@ impl NoteStore {
             }
             current_notes.push(Note::from(row));
         }
-        Ok(notes)
-    }
-    pub async fn get_days_notes(&self, day: NaiveDate) -> Result<DayNotes> {
-        let jobbies = sqlx::query_as!(
-            NoteRow,
-            r#"SELECT
-            n.id "id: u32",
-            n.body,
-            n.completed "completed: bool",
-            n.created_at "created_at: DateTime<Utc>",
-            n.updated_at "updated_at: DateTime<Utc>",
-            n.deleted_at "deleted_at: DateTime<Utc>"
-            FROM note as n INNER JOIN day as d ON n.day_key = d.id WHERE d.date =? and n.deleted_at IS NULL
-            ORDER BY n.created_at;"#,
-            day
-        )
-        .fetch_all(&self.pool)
-        .await
-        .context("Failed fetching day notes.")?;
-        let task_count = jobbies.len() as u32;
-        let text = sqlx::query_scalar!("SELECT day_text from day WHERE date = ?;", day)
+        let text = sqlx::query_scalar!("SELECT day_text from day WHERE date = ?;", current_day)
             .fetch_optional(&self.pool)
             .await
             .context("Failed fetching day summary text.")?;
-        Ok(DayNotes {
-            notes: jobbies.into_iter().map(|n| Note::from(n)).collect(),
-            note_count: task_count,
-            date: day,
+        notes.push(DayNotes {
+            notes: std::mem::take(&mut current_notes),
+            date: current_day.unwrap(),
+            note_count: current_notes.len() as u32,
             day_text: text.unwrap_or(String::new()),
-        })
+        });
+        Ok(notes)
+    }
+    pub async fn get_days_notes(&self, day: NaiveDate) -> Result<DayNotes> {
+        let notes = self.get_day_notes_in_range(day, day).await?;
+        log::debug!("Found {} notes for day {}", notes.len(), day);
+        if notes.is_empty() {
+            return Err(anyhow::anyhow!("No notes found for day {}", day));
+        }
+        Ok(notes.into_iter().next().unwrap())
     }
 }
