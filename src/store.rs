@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use crate::notes::{DayNotes, NewNote, Note, ParsedDayNotes, ParsedNote};
 use anyhow::{Context, Result};
-use chrono::{DateTime, Days, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Days, NaiveDate, Utc};
 use sqlx::{SqlitePool, migrate, prelude::FromRow};
 pub async fn setup_db(fname: &str) -> NoteStore {
     let pool = SqlitePool::connect(fname).await.unwrap();
@@ -23,7 +25,7 @@ pub struct NoteRow {
     updated_at: Option<DateTime<Utc>>,
     deleted_at: Option<DateTime<Utc>>,
 }
-#[derive(FromRow)]
+#[derive(FromRow, Clone, Default)]
 pub struct NoteRowDate {
     pub id: u32,
     pub body: String,
@@ -92,9 +94,17 @@ impl NoteStore {
     }
     pub async fn insert_note(&self, n: NewNote) -> Result<Note> {
         let utc_naive = n.created_at.date_naive();
-        let day_key = sqlx::query_scalar!(r#"SELECT id FROM day WHERE date=?1;"#, utc_naive)
-            .fetch_one(&self.pool)
-            .await? as u32;
+        let day_key = match sqlx::query_scalar!(r#"SELECT id FROM day WHERE date=?1;"#, utc_naive)
+            .fetch_optional(&self.pool)
+            .await
+            .context("Failed fetching day during note insertion.")?
+        {
+            Some(id) => id as u32,
+            None => {
+                let day = self.insert_day(utc_naive, None, "").await?;
+                day.id as u32
+            }
+        };
         let note = self
             ._insert_note(&n.body, n.created_at, n.completed, day_key)
             .await
@@ -174,12 +184,13 @@ impl NoteStore {
         .map(|_| ())
         .context("Failed while updating day text.")
     }
+    /// Get day notes in inclusive range.
     pub async fn get_day_notes_in_range(
         &self,
         start_day: NaiveDate,
         end_day: NaiveDate,
     ) -> Result<Vec<DayNotes>> {
-        let jobbies = sqlx::query_as!(
+        let mut jobbies = sqlx::query_as!(
             NoteRowDate,
             r#"SELECT
             n.id "id: u32",
@@ -197,47 +208,43 @@ impl NoteStore {
         .fetch_all(&self.pool)
         .await
         .context(format!("Failed fetching day notes between days {}:{}.", start_day, end_day))?;
-        let mut current_notes = vec![];
-        let mut notes = vec![];
-        let mut current_day = None;
         log::info!(
             "Fetched rows {} when querying days between {} and {}",
             jobbies.len(),
             start_day,
             end_day
         );
+        let day_delta = (end_day - start_day).num_days() + 1;
+        let mut notes: HashMap<NaiveDate, Vec<NoteRowDate>> =
+            HashMap::with_capacity(day_delta as usize);
         for row in jobbies {
-            if current_day.is_none() {
-                current_day = Some(row.date);
-            }
-            if current_day.unwrap() != row.date {
-                let text =
-                    sqlx::query_scalar!("SELECT day_text from day WHERE date = ?;", current_day)
-                        .fetch_optional(&self.pool)
-                        .await
-                        .context("Failed fetching day summary text.")?;
-                let note_count = current_notes.len() as u32;
-                notes.push(DayNotes {
-                    notes: std::mem::take(&mut current_notes),
-                    date: current_day.unwrap(),
-                    note_count,
-                    day_text: text.unwrap_or(String::new()),
-                });
-                current_day = Some(row.date)
-            }
-            current_notes.push(Note::from(row));
+            let day = row.date;
+            notes.entry(day).or_default().push(row);
         }
-        let text = sqlx::query_scalar!("SELECT day_text from day WHERE date = ?;", current_day)
-            .fetch_optional(&self.pool)
-            .await
-            .context("Failed fetching day summary text.")?;
-        notes.push(DayNotes {
-            notes: std::mem::take(&mut current_notes),
-            date: current_day.unwrap(),
-            note_count: current_notes.len() as u32,
-            day_text: text.unwrap_or(String::new()),
-        });
-        Ok(notes)
+        let mut out = vec![];
+        for delta in 0..day_delta {
+            let day = start_day
+                .checked_add_days(Days::new(delta as u64))
+                .expect("shouldn't be able to overflow.");
+            let day_notes = notes
+                .remove(&day)
+                .unwrap_or(vec![])
+                .into_iter()
+                .map(Note::from)
+                .collect::<Vec<_>>();
+            let text = sqlx::query_scalar!("SELECT day_text from day WHERE date = ?;", day)
+                .fetch_optional(&self.pool)
+                .await
+                .context("Failed fetching day summary text.")?;
+            let note_count = day_notes.len() as u32;
+            out.push(DayNotes {
+                notes: day_notes,
+                date: day,
+                note_count,
+                day_text: text.unwrap_or(String::new()),
+            });
+        }
+        Ok(out)
     }
     pub async fn get_days_notes(&self, day: NaiveDate) -> Result<DayNotes> {
         let notes = self.get_day_notes_in_range(day, day).await?;
@@ -246,5 +253,34 @@ impl NoteStore {
             return Err(anyhow::anyhow!("No notes found for day {}", day));
         }
         Ok(notes.into_iter().next().unwrap())
+    }
+}
+
+pub mod test {
+    use super::*;
+    use chrono::{NaiveDate, Utc};
+    use sqlx::migrate;
+
+    async fn setup_sqlitedb() -> NoteStore {
+        let s = setup_db("sqlite://:memory:").await;
+        migrate!().run(&s.pool).await.unwrap();
+        s.insert_day(Utc::now().date_naive(), None, "")
+            .await
+            .unwrap();
+        s
+    }
+    #[tokio::test]
+    async fn test_get_day_notes() {
+        let store = setup_sqlitedb().await;
+        let day = Utc::now().date_naive();
+        let notes = store.get_day_notes_in_range(day, day).await.unwrap();
+        assert_eq!(notes.len(), 1);
+    }
+    #[tokio::test]
+    async fn test_get_day_notes_none() {
+        let store = setup_sqlitedb().await;
+        let day = Utc::now().date_naive();
+        let notes = store.get_day_notes_in_range(day, day).await.unwrap();
+        assert_eq!(notes.notes.len(), 0);
     }
 }
