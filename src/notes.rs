@@ -257,7 +257,7 @@ impl ParsedDayNotes {
         // Update notes by line.
         for line in line_iter {
             // exit the iteration if end of day note is found.
-            if line == "---" {
+            if &line[..3] == "---" {
                 break;
             }
             let line = line.trim();
