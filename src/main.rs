@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
             if notes.note_count == 0 {
                 edit(&store, None).await?
             } else {
-                show(&store, None).await?
+                show_range(&store, None, Period::Week.to_day_count()).await?
             }
         }
         Mode::Show { day, period } => match period {
@@ -151,9 +151,15 @@ async fn parse_notes_string(s: String, store: &NoteStore) -> Result<DayNotes> {
         if line.is_empty() {
             continue;
         }
+        if &line[..3] == "---" {
+            break;
+        }
         match line.chars().next().unwrap() {
             '-' => {
-                let Some(n) = Note::from_pretty(store, line).await? else {
+                let Some(n) = Note::from_pretty(store, line)
+                    .await
+                    .context(format!("Failed parsing line {} to note.", &line))?
+                else {
                     continue;
                 };
                 seen_notes.push(n.id);
